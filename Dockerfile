@@ -31,6 +31,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     bash \
     ca-certificates \
+    libxml2-dev \
+    libxslt1-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Chromium for headless browser MCP tools (chromedp-based tools need it)
@@ -72,8 +74,10 @@ RUN npm install -g @openai/codex
 RUN mkdir -p /home/tingly/.claude /home/tingly/.codex /home/tingly/.local /app/mcp && \
     chown -R tingly:tingly /home/tingly /app
 
-# Switch back to non-root user
-USER tingly
+# Keep running as root — entrypoint.sh normalizes ownership of the mounted
+# data volumes (so a folder copied from another machine works), then drops
+# privileges to the tingly user via setpriv before starting the server.
+USER root
 
 # Copy entrypoint script
 COPY --chown=tingly:tingly entrypoint.sh /app/entrypoint.sh

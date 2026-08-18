@@ -33,6 +33,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Chromium for headless browser MCP tools (chromedp-based tools need it)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    fonts-liberation \
+    fonts-dejavu-core \
+    libnss3 \
+    libxss1 \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libgtk-3-0 \
+    libgbm1 \
+    libxkbcommon0 \
+    libxshmfence1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/chromium /usr/bin/chromium-browser \
+    && ln -sf /usr/bin/chromium /usr/bin/google-chrome
+
+ENV CHROME_BIN=/usr/bin/chromium
+ENV CHROMEDP_NO_SANDBOX=true
+
 # Install uv (fast Python package installer/runner)
 # Install to /usr/local/bin so it's accessible to all users
 RUN curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh && \

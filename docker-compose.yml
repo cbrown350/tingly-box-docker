@@ -25,6 +25,8 @@ services:
     container_name: tingly-box
     ports:
       - "${TINGLY_PORT:-12580}:12580"
+      # For Codex and Claude Code auth must use codes and not link callbacks unless swith to host networking by running the apps inside the container and opening the login links in a browser
+      #  or else use network_mode: host and change callback url manually point to the host machine's IP address (not localhost) allowing for reauth inside Tingly web UI
     volumes:
       # Persistent data — survives container rebuilds
       # This is the tingly-box data home (config.json, db, keys, guardrails, etc.)

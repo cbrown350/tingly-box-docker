@@ -1,31 +1,45 @@
 #!/bin/bash
-# entrypoint.sh — sets up MCP tool dependencies on first boot, then starts tingly-box
-# This runs as the tingly user inside the container.
+# entrypoint.sh — generic first-boot setup for MCP tools, then starts tingly-box.
+# Runs as the tingly user inside the container.
+#
+# Scans /app/mcp/ for any subdirectory containing package.json or pyproject.toml
+# and installs dependencies if they haven't been installed yet. This is generic
+# and works with any MCP tools the user places in the mounted ./data/mcp/ volume.
 
 set -e
 
 echo "=== Tingly Box Docker Entry Point ==="
 
-# ── Install Node MCP dependencies (if package.json exists and node_modules doesn't) ──
-for dir in /app/mcp/openfusion /app/mcp/redlib-mcp-server /app/mcp/medical-mcp; do
-    if [ -f "$dir/package.json" ] && [ ! -d "$dir/node_modules" ]; then
-        echo "Installing Node dependencies for $(basename $dir)..."
-        cd "$dir" && npm install --production 2>&1 | tail -3 || echo "WARNING: npm install failed for $(basename $dir)"
-    fi
-done
+MCP_DIR="/app/mcp"
 
-# ── Install Python MCP: mealie-mcp ──
-if [ -f "/app/mcp/mealie-mcp/pyproject.toml" ] && [ ! -d "/app/mcp/mealie-mcp/.venv" ]; then
-    echo "Setting up mealie-mcp Python venv..."
-    cd /app/mcp/mealie-mcp && uv venv && uv pip install -e . 2>&1 | tail -3 || echo "WARNING: mealie-mcp setup failed"
+if [ -d "$MCP_DIR" ]; then
+    # ── Node MCP tools: npm install where package.json exists but node_modules doesn't ──
+    for pkgjson in "$MCP_DIR"/*/package.json; do
+        [ -f "$pkgjson" ] || continue
+        dir=$(dirname "$pkgjson")
+        name=$(basename "$dir")
+        if [ ! -d "$dir/node_modules" ]; then
+            echo "Installing Node dependencies for $name..."
+            (cd "$dir" && npm install --production 2>&1 | tail -3) || echo "WARNING: npm install failed for $name"
+        else
+            echo "Node dependencies already present for $name, skipping."
+        fi
+    done
+
+    # ── Python MCP tools: uv venv + install where pyproject.toml exists but .venv doesn't ──
+    for pyproject in "$MCP_DIR"/*/pyproject.toml; do
+        [ -f "$pyproject" ] || continue
+        dir=$(dirname "$pyproject")
+        name=$(basename "$dir")
+        if [ ! -d "$dir/.venv" ]; then
+            echo "Setting up Python venv for $name..."
+            (cd "$dir" && uv venv && uv pip install -e . 2>&1 | tail -3) || echo "WARNING: Python setup failed for $name"
+        else
+            echo "Python venv already present for $name, skipping."
+        fi
+    done
 fi
 
-# ── Install Python MCP: kb ──
-if [ -f "/app/mcp/kb/pyproject.toml" ] && [ ! -d "/app/mcp/kb/.venv" ]; then
-    echo "Setting up kb Python venv..."
-    cd /app/mcp/kb && uv venv && uv pip install -e . 2>&1 | tail -3 || echo "WARNING: kb setup failed"
-fi
-
-# ── Start tingly-box (original CMD) ──
+# ── Start tingly-box ──
 echo "=== Starting Tingly Box ==="
-exec tingly-box restart --host ${TINGLY_HOST:-0.0.0.0} --port ${TINGLY_PORT:-12580} ${TINGLY_DEBUG:+--verbose --debug}
+exec tingly-box restart --host "${TINGLY_HOST:-0.0.0.0}" --port "${TINGLY_PORT:-12580}" ${TINGLY_DEBUG:+--verbose --debug}

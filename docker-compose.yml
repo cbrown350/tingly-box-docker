@@ -1,0 +1,60 @@
+# Tingly Box — Docker Compose deployment
+# Uses upstream ghcr.io/tingly-dev/tingly-box image extended with dev tools + agent CLIs.
+#
+# Volumes:
+#   ./data/.tingly-box/  → persistent data home (config.json, db, keys, guardrails, etc.)
+#   ./data/memory/       → memory store
+#   ./data/logs/         → log files
+#   ./data/.claude/      → Claude Code OAuth tokens
+#   ./data/.codex/       → Codex OAuth tokens
+#   ./data/mcp/          → workspace for any MCP tools you install inside the container
+#
+# Environment:
+#   All settings via .env file (see .env.example). Copy to .env and customize.
+#   If your config.json references additional env vars, add them to .env
+#   and pass them through in the environment section below.
+
+services:
+  tingly-box:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TINGLY_VERSION: "${TINGLY_VERSION:-latest}"
+    image: tingly-box-docker:local
+    container_name: tingly-box
+    ports:
+      - "${TINGLY_PORT:-12580}:12580"
+    volumes:
+      # Persistent data — survives container rebuilds
+      # This is the tingly-box data home (config.json, db, keys, guardrails, etc.)
+      - ./data/.tingly-box:/app/.tingly-box
+      - ./data/memory:/app/memory
+      - ./data/logs:/app/logs
+
+      # Claude Code and Codex OAuth token storage (persisted across restarts)
+      - ./data/.claude:/home/tingly/.claude
+      - ./data/.codex:/home/tingly/.codex
+
+      # MCP tools workspace — clone/install MCP servers here, persist across rebuilds
+      - ./data/mcp:/app/mcp
+
+      # uv/pip user installs persisted across rebuilds
+      - ./data/.local:/home/tingly/.local
+    environment:
+      - TINGLY_HOST=${TINGLY_HOST:-0.0.0.0}
+      - TINGLY_PORT=12580
+      - TINGLY_DEBUG=${TINGLY_DEBUG:-false}
+      # Pass through any additional env vars from .env file
+      # Add your API keys and MCP tool settings to .env, then uncomment
+      # the lines below or add your own:
+      # - SERPER_API_KEY=${SERPER_API_KEY:-}
+      # - BRAVE_API_KEY=${BRAVE_API_KEY:-}
+      # - MY_CUSTOM_VAR=${MY_CUSTOM_VAR:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "tingly-box", "version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

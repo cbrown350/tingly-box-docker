@@ -1,0 +1,128 @@
+name: Auto-rebuild on upstream release
+
+on:
+  # Check for new upstream releases every 6 hours
+  schedule:
+    - cron: '0 */6 * * *'
+  # Allow manual trigger with a specific version
+  workflow_dispatch:
+    inputs:
+      tingly_version:
+        description: 'Upstream version tag to build (e.g., v0.260813.2). Leave blank to auto-detect latest.'
+        required: false
+        type: string
+        default: ''
+  # Rebuild when Dockerfile or compose changes
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - '.github/workflows/auto-rebuild.yml'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect latest upstream release
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Use manual input if provided, otherwise query upstream API
+          if [ -n "${{ github.event.inputs.tingly_version }}" ]; then
+            VERSION="${{ github.event.inputs.tingly_version }}"
+          else
+            # Query the tingly-dev/tingly-box releases via GitHub API
+            VERSION=$(gh api repos/tingly-dev/tingly-box/releases/latest --jq '.tag_name')
+            if [ -z "$VERSION" ]; then
+              echo "Could not determine latest upstream release. Exiting."
+              exit 0
+            fi
+          fi
+
+          # Ensure version starts with 'v' (GHCR tags are v-prefixed)
+          if [[ "$VERSION" != v* ]]; then
+            VERSION="v${VERSION}"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Detected upstream version: $VERSION"
+
+      - name: Check if image already exists
+        id: exists
+        run: |
+          TAG="${{ steps.detect.outputs.version }}"
+          # Try to inspect the manifest — if it succeeds, the tag already exists
+          # Only skip on scheduled runs; always rebuild on push/manual trigger
+          if [ "${{ github.event_name }}" == "schedule" ] && docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG} >/dev/null 2>&1; then
+            echo "already_built=true" >> "$GITHUB_OUTPUT"
+            echo "Image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG} already exists — skipping scheduled build."
+          else
+            echo "already_built=false" >> "$GITHUB_OUTPUT"
+            echo "Will build ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}."
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.exists.outputs.already_built != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: steps.exists.outputs.already_built != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        if: steps.exists.outputs.already_built != 'true'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.detect.outputs.version }}
+            type=raw,value=latest
+
+      - name: Build and push
+        if: steps.exists.outputs.already_built != 'true'
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            TINGLY_VERSION=${{ steps.detect.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.exists.outputs.already_built }}" == "true" ]; then
+            echo "### Skipped — image already exists" >> $GITHUB_STEP_SUMMARY
+            echo "Version \`${{ steps.detect.outputs.version }}\` was already built." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Built and pushed :rocket:" >> $GITHUB_STEP_SUMMARY
+            echo "Image: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.detect.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Pull with:" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.detect.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi

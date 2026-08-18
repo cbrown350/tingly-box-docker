@@ -1,0 +1,22 @@
+# ── Secrets & Environment ──
+.env
+.env.local
+.env.*.local
+
+# ── Real config (contains real keys, tokens, paths) ──
+# The template config at config/config.json is committed (sanitized).
+# The real config lives in data/.tingly-box/ and is NEVER committed.
+data/
+
+# ── OS files ──
+.DS_Store
+.DS_Store?
+
+# ── Real config (contains your actual keys, tokens, paths, routing rules) ──
+config/
+# ── Real data and secrets (never commit) ──
+# The real config lives in data/.tingly-box/ and is NEVER committed.
+data/
+
+# ── Docker build artifacts ──
+.docker/

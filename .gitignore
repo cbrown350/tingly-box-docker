@@ -18,5 +18,9 @@ config/
 # The real config lives in data/.tingly-box/ and is NEVER committed.
 data/
 
+# ── Docker compose override (personal env vars + volumes) ──
+docker-compose.override.yml
+docker-compose.override.*.yml
+
 # ── Docker build artifacts ──
 .docker/

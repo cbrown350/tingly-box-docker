@@ -55,10 +55,15 @@ RUN mkdir -p /home/tingly/.claude /home/tingly/.codex /home/tingly/.local /app/m
 # Switch back to non-root user
 USER tingly
 
+# Copy entrypoint script
+COPY --chown=tingly:tingly entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 # Set PATH so uv/uvx and local bin are available
 ENV PATH="/home/tingly/.local/bin:/usr/local/bin:${PATH}"
 
 # Verify installations
 RUN claude --version && codex --version && uv --version && python3 --version && npx --version
 
-# Keep the upstream CMD intact — tingly-box via pm2
+# Use our entrypoint that sets up MCP deps then starts tingly-box
+ENTRYPOINT ["/app/entrypoint.sh"]

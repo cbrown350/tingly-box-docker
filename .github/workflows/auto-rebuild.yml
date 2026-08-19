@@ -1,22 +1,28 @@
 name: Auto-rebuild on upstream release
 
 on:
-  # Check for new upstream releases every 6 hours
+  # Check for new upstream releases/commits every 6 hours
   schedule:
     - cron: '0 */6 * * *'
-  # Allow manual trigger with a specific version
+  # Allow manual trigger with specific versions
   workflow_dispatch:
     inputs:
       tingly_version:
-        description: 'Upstream version tag to build (e.g., v0.260813.2). Leave blank to auto-detect latest.'
+        description: 'Upstream tingly-box version tag to build. Leave blank to auto-detect latest.'
         required: false
         type: string
         default: ''
-  # Rebuild when Dockerfile or compose changes
+      visionbridge_sha:
+        description: 'Upstream visionbridge commit SHA to build. Leave blank to auto-detect latest.'
+        required: false
+        type: string
+        default: ''
+  # Rebuild when any build config changes
   push:
     branches: [main]
     paths:
       - 'Dockerfile'
+      - 'visionbridge.Dockerfile'
       - 'docker-compose.yml'
       - '.github/workflows/auto-rebuild.yml'
 
@@ -25,47 +31,43 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  check-and-build:
+  # ─────────────────────────────────────────────────────────────
+  # tingly-box — tracks upstream semver releases (git tags)
+  # ─────────────────────────────────────────────────────────────
+  tingly-box:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Detect latest upstream release
+      - name: Detect latest tingly-box release
         id: detect
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Use manual input if provided, otherwise query upstream API
           if [ -n "${{ github.event.inputs.tingly_version }}" ]; then
             VERSION="${{ github.event.inputs.tingly_version }}"
           else
-            # Query the tingly-dev/tingly-box releases via GitHub API
             VERSION=$(gh api repos/tingly-dev/tingly-box/releases/latest --jq '.tag_name')
             if [ -z "$VERSION" ]; then
               echo "Could not determine latest upstream release. Exiting."
               exit 0
             fi
           fi
-
           # Ensure version starts with 'v' (GHCR tags are v-prefixed)
           if [[ "$VERSION" != v* ]]; then
             VERSION="v${VERSION}"
           fi
-
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Detected upstream version: $VERSION"
+          echo "Detected tingly-box version: $VERSION"
 
       - name: Check if image already exists
         id: exists
         run: |
           TAG="${{ steps.detect.outputs.version }}"
-          # Try to inspect the manifest — if it succeeds, the tag already exists
-          # Only skip on scheduled runs; always rebuild on push/manual trigger
           if [ "${{ github.event_name }}" == "schedule" ] && docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG} >/dev/null 2>&1; then
             echo "already_built=true" >> "$GITHUB_OUTPUT"
             echo "Image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG} already exists — skipping scheduled build."
@@ -98,7 +100,6 @@ jobs:
 
       - name: Build and push
         if: steps.exists.outputs.already_built != 'true'
-        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -111,18 +112,88 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Summary
-        if: always()
+  # ─────────────────────────────────────────────────────────────
+  # visionbridge — tracks upstream commits on main (no releases/tags),
+  # builds from source pinned to a commit SHA, and auto-advances the
+  # committed VISIONBRIDGE_SHA pin so the repo tracks upstream.
+  # ─────────────────────────────────────────────────────────────
+  visionbridge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect latest visionbridge commit
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${{ steps.exists.outputs.already_built }}" == "true" ]; then
-            echo "### Skipped — image already exists" >> $GITHUB_STEP_SUMMARY
-            echo "Version \`${{ steps.detect.outputs.version }}\` was already built." >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ github.event.inputs.visionbridge_sha }}" ]; then
+            SHA="${{ github.event.inputs.visionbridge_sha }}"
           else
-            echo "### Built and pushed :rocket:" >> $GITHUB_STEP_SUMMARY
-            echo "Image: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.detect.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Pull with:" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.detect.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            SHA=$(gh api repos/thomasunise/visionbridge/commits/main --jq '.sha')
           fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Detected visionbridge commit: $SHA"
+
+      - name: Compare with committed pin
+        id: pin
+        run: |
+          COMMITTED=$(grep '^ARG VISIONBRIDGE_SHA=' visionbridge.Dockerfile | cut -d= -f2)
+          echo "committed=$COMMITTED" >> "$GITHUB_OUTPUT"
+          echo "Committed pin: $COMMITTED"
+
+      - name: Check if image already exists (schedule only)
+        id: exists
+        run: |
+          SHA="${{ steps.detect.outputs.sha }}"
+          if [ "${{ github.event_name }}" == "schedule" ] && docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-visionbridge:${SHA} >/dev/null 2>&1; then
+            echo "already_built=true" >> "$GITHUB_OUTPUT"
+            echo "Image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-visionbridge:${SHA} already exists — skipping scheduled build."
+          else
+            echo "already_built=false" >> "$GITHUB_OUTPUT"
+            echo "Will build visionbridge:${SHA}."
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.exists.outputs.already_built != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: steps.exists.outputs.already_built != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push visionbridge
+        if: steps.exists.outputs.already_built != 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./visionbridge.Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-visionbridge:${{ steps.detect.outputs.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-visionbridge:latest
+          build-args: |
+            VISIONBRIDGE_SHA=${{ steps.detect.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Bump committed pin if upstream moved
+        if: steps.pin.outputs.committed != steps.detect.outputs.sha
+        env:
+          SHA: ${{ steps.detect.outputs.sha }}
+        run: |
+          sed -i "s/^ARG VISIONBRIDGE_SHA=.*/ARG VISIONBRIDGE_SHA=${SHA}/" visionbridge.Dockerfile
+          sed -i "s/^VISIONBRIDGE_SHA=.*/VISIONBRIDGE_SHA=${SHA}/" .env.example
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add visionbridge.Dockerfile .env.example
+          git commit -m "chore: bump visionbridge to ${SHA}"
+          git push

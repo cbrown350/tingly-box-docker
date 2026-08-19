@@ -60,3 +60,39 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # VisionBridge — gives text-only LLMs vision through an OpenAI-compatible proxy.
+  # Reasoning + vision both route through tingly-box (below) so routing, OAuth,
+  # rate limits and usage tracking all stay in one place. VisionBridge itself is
+  # NOT exposed to clients; they reach it via the tingly-box visionbridge model.
+  # Built from source via visionbridge.Dockerfile (no released image exists yet),
+  # pinned to VISIONBRIDGE_SHA. All settings come from .env (see .env.example).
+  visionbridge:
+    build:
+      context: .
+      dockerfile: visionbridge.Dockerfile
+      args:
+        VISIONBRIDGE_SHA: "${VISIONBRIDGE_SHA:-92c793feaee0}"
+    image: visionbridge:local
+    container_name: visionbridge
+    # Internal only — clients never reach VisionBridge directly, only via
+    # tingly-box. The host port is optional for debugging.
+    # ports:
+    #   - "${VISIONBRIDGE_PORT:-8080}:8080"
+    environment:
+      # Reasoning backend = tingly-box OpenAI-compatible endpoint (service name)
+      REASONING_BASE_URL: "http://tingly-box:12580/tingly/${VISIONBRIDGE_SCENARIO:-custom}/v1"
+      REASONING_API_KEY: "${TINGLY_MODEL_TOKEN:?TINGLY_MODEL_TOKEN must be set}"
+      REASONING_MODEL: "${VISIONBRIDGE_REASONING_MODEL:-z.ai/glm-5.3}"
+      # Vision backend = same tingly-box, vision-capable model rule
+      VISION_BASE_URL: "http://tingly-box:12580/tingly/${VISIONBRIDGE_SCENARIO:-custom}/v1"
+      VISION_API_KEY: "${TINGLY_MODEL_TOKEN:?TINGLY_MODEL_TOKEN must be set}"
+      VISION_MODEL: "${VISIONBRIDGE_VISION_MODEL:-ollama/qwen3.5:397b}"
+      # The model name VisionBridge advertises; clients request this through tingly-box
+      BRIDGE_MODEL_NAME: "${VISIONBRIDGE_MODEL_NAME:-visionbridge}"
+      SCENE_PRIMING: "${VISIONBRIDGE_SCENE_PRIMING:-true}"
+      MAX_VISION_CALLS: "${VISIONBRIDGE_MAX_VISION_CALLS:-8}"
+      TOOL_MODE: "${VISIONBRIDGE_TOOL_MODE:-auto}"
+    restart: unless-stopped
+    depends_on:
+      - tingly-box

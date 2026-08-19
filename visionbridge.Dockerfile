@@ -8,7 +8,7 @@
 # Build: docker build -f visionbridge.Dockerfile -t visionbridge:local .
 # Or in compose: build: { context: ., dockerfile: visionbridge.Dockerfile }
 
-ARG VISIONBRIDGE_SHA=92c793feaee0
+ARG VISIONBRIDGE_SHA=92c793feaee0df688a20cf71c4f135ba00ef9bd2
 ARG VISIONBRIDGE_REPO=https://github.com/thomasunise/visionbridge
 
 FROM python:3.12-slim AS builder
